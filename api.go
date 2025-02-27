@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 
 	"github.com/gorilla/mux"
 )
@@ -24,8 +25,13 @@ func NewApiServer(listenAddr string, store Storage) *ApiServer {
 func (s *ApiServer) Run() {
 	router := mux.NewRouter()
 
+	router.HandleFunc("/account", makeHttpHandleFunc(s.handleAccount)).Methods("GET")
+	router.HandleFunc("/account/{id}", makeHttpHandleFunc(s.handleGetAccountById)).Methods("GET")
+	router.HandleFunc("/account/{id}", makeHttpHandleFunc(s.handleDeleteAccount)).Methods("DELETE")
+	router.HandleFunc("/transfer", makeHttpHandleFunc(s.handleTransfer)).Methods("POST")
+
 	router.HandleFunc("/account", makeHttpHandleFunc(s.handleAccount))
-	router.HandleFunc("/account/{id}", makeHttpHandleFunc(s.handleGetAccountById))
+	router.HandleFunc("/account/{id}", makeHttpHandleFunc(s.handleAccount))
 
 	log.Println("Starting the server port: ", s.listenAddr)
 	http.ListenAndServe(s.listenAddr, router)
@@ -39,10 +45,6 @@ func (s *ApiServer) handleAccount(w http.ResponseWriter, r *http.Request) error 
 
 	if r.Method == "POST" {
 		return s.handleCreateAccount(w, r)
-	}
-
-	if r.Method == "DELETE" {
-		return s.handleDeleteAccount(w, r)
 	}
 
 	return fmt.Errorf("Not allowed %s", r.Method)
@@ -60,12 +62,24 @@ func (s *ApiServer) handleGetAccount(w http.ResponseWriter, r *http.Request) err
 }
 
 func (s *ApiServer) handleGetAccountById(w http.ResponseWriter, r *http.Request) error {
-	//notice how this is set in Run
-	vars := mux.Vars(r)["id"]
+	parameter, err := getParameter(r, "id")
+	if err != nil {
+		fmt.Println("Error retrieving parameter")
+		return err
+	}
 
-	fmt.Println(vars)
+	id, err := strconv.Atoi(parameter)
+	if err != nil {
+		fmt.Printf("Unable to convert parameter %s", parameter)
+		return err
+	}
 
-	account := NewAccount("lui", "cas", 0)
+	account, err := s.store.GetAccountById(id)
+	if err != nil {
+		fmt.Printf("Error retrieving account for %d", id)
+		return err
+	}
+
 	return WriteJson(w, http.StatusOK, account)
 }
 
@@ -74,6 +88,7 @@ func (s *ApiServer) handleCreateAccount(w http.ResponseWriter, r *http.Request) 
 	if err := json.NewDecoder(r.Body).Decode(accRequest); err != nil {
 		return err
 	}
+	defer r.Body.Close()
 
 	account := NewAccount(accRequest.FirstName, accRequest.LastName, accRequest.Balance)
 
@@ -89,11 +104,33 @@ func (s *ApiServer) handleCreateAccount(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *ApiServer) handleDeleteAccount(w http.ResponseWriter, r *http.Request) error {
-	return nil
+	parameter, err := getParameter(r, "id")
+	if err != nil {
+		fmt.Println("Error retrieving parameter")
+		return err
+	}
+
+	id, err := strconv.Atoi(parameter)
+	if err != nil {
+		fmt.Printf("Unable to convert parameter %s", parameter)
+		return err
+	}
+
+	if err := s.store.DeleteAccount(id); err != nil {
+		return fmt.Errorf("Could not delete account with id=%d", id)
+	}
+
+	return WriteJson(w, http.StatusOK, map[string]int{"deleted": id})
 }
 
 func (s *ApiServer) handleTransfer(w http.ResponseWriter, r *http.Request) error {
-	return nil
+	transferRequest := new(TransferRequest)
+	if err := json.NewDecoder(r.Body).Decode(transferRequest); err != nil {
+		return err
+	}
+	defer r.Body.Close()
+
+	return WriteJson(w, http.StatusOK, transferRequest)
 }
 
 // least important functions should go to the bottom
@@ -106,7 +143,7 @@ func WriteJson(w http.ResponseWriter, status int, v any) error {
 // my functions are of this type by virtue of the signature
 type apiFunc func(w http.ResponseWriter, r *http.Request) error
 type ApiError struct {
-	Error string
+	Error string `json:"error"`
 }
 
 func makeHttpHandleFunc(f apiFunc) http.HandlerFunc {
@@ -116,4 +153,14 @@ func makeHttpHandleFunc(f apiFunc) http.HandlerFunc {
 		}
 
 	}
+}
+
+func getParameter(r *http.Request, field string) (string, error) {
+	parameter, ok := mux.Vars(r)[field]
+
+	if !ok {
+		return "", fmt.Errorf("invalid parameter: %s", field)
+	}
+
+	return parameter, nil
 }
