@@ -28,35 +28,57 @@ func NewApiServer(listenAddr string, store Storage) *ApiServer {
 func (s *ApiServer) Run() {
 	router := mux.NewRouter()
 
-	router.HandleFunc("/account", makeHttpHandleFunc(s.handleAccount)).Methods("GET")
+	//this should be admin endpoint
+	router.HandleFunc("/account", makeHttpHandleFunc(s.handleGetAccounts)).Methods("GET")    //get all accounts
+	router.HandleFunc("/account", makeHttpHandleFunc(s.handleCreateAccount)).Methods("POST") //create new account
 
-	// needs to be auth
+	//user api
+	router.HandleFunc("/login", makeHttpHandleFunc(s.handleLogin)).Methods("POST")
 	router.HandleFunc("/account/{id}", withJwtAuth(makeHttpHandleFunc(s.handleGetAccountById), s.store)).Methods("GET")
 	router.HandleFunc("/account/{id}", makeHttpHandleFunc(s.handleDeleteAccount)).Methods("DELETE")
-
 	router.HandleFunc("/transfer", makeHttpHandleFunc(s.handleTransfer)).Methods("POST")
-
-	router.HandleFunc("/account", makeHttpHandleFunc(s.handleAccount))
-	router.HandleFunc("/account/{id}", makeHttpHandleFunc(s.handleAccount))
 
 	log.Println("Starting the server port: ", s.listenAddr)
 	http.ListenAndServe(s.listenAddr, router)
 }
 
-func (s *ApiServer) handleAccount(w http.ResponseWriter, r *http.Request) error {
+func (s *ApiServer) handleLogin(w http.ResponseWriter, r *http.Request) error {
+	var req LoginRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 
-	if r.Method == "GET" {
-		return s.handleGetAccount(w, r)
+		fmt.Println("Unable to parse request")
+		return fmt.Errorf("Not Authenticated")
 	}
 
-	if r.Method == "POST" {
-		return s.handleCreateAccount(w, r)
+	//handle acc
+	acc, err := s.store.GetAccountByNumber(req.Number)
+
+	if err != nil {
+		fmt.Println("Error retrieving account")
+		return fmt.Errorf("Not Authenticated")
 	}
 
-	return fmt.Errorf("Not allowed %s", r.Method)
+	//verify that the passwords match
+	if err := acc.ValidatePassword(req.Password); err != nil {
+		fmt.Println("Error validating password")
+		return fmt.Errorf("Not Authenticated")
+	}
+
+	token, err := createJwt(acc)
+	if err != nil {
+		fmt.Println("Error creating JWT")
+		return fmt.Errorf("Not Authenticated")
+	}
+
+	resp := LoginResponse{
+		Number: acc.Number,
+		Token:  token,
+	}
+
+	return WriteJson(w, http.StatusOK, resp)
 }
 
-func (s *ApiServer) handleGetAccount(w http.ResponseWriter, r *http.Request) error {
+func (s *ApiServer) handleGetAccounts(w http.ResponseWriter, r *http.Request) error {
 	accounts, err := s.store.GetAccounts()
 
 	if err != nil {
@@ -96,18 +118,17 @@ func (s *ApiServer) handleCreateAccount(w http.ResponseWriter, r *http.Request) 
 	}
 	defer r.Body.Close()
 
-	account := NewAccount(accRequest.FirstName, accRequest.LastName, accRequest.Balance)
+	account, err := NewAccount(accRequest.FirstName, accRequest.LastName, accRequest.Password, accRequest.Balance)
+	if err != nil {
+		return err
+	}
+
 	if err := s.store.CreateAccount(account); err != nil {
 		fmt.Println("Error creating account")
 		return err
 	}
 
-	tokenString, err := createJwt(account)
-	if err != nil {
-		return err
-	}
-
-	fmt.Printf("Welcome %s, with balance=%d, token=%s", accRequest.FirstName, accRequest.Balance, tokenString)
+	fmt.Printf("Welcome %s, with balance=%d", accRequest.FirstName, accRequest.Balance)
 
 	return WriteJson(w, http.StatusOK, account)
 
@@ -190,6 +211,7 @@ func withJwtAuth(handlerFunc http.HandlerFunc, storage Storage) http.HandlerFunc
 			return
 		}
 
+		//get user claims
 		claims := token.Claims.(jwt.MapClaims)
 		claimAccountNumber, ok := claims["accountNumber"].(float64)
 		if !ok {
@@ -227,6 +249,9 @@ func createJwt(account *Account) (string, error) {
 	}
 
 	secret := os.Getenv("JWT_SECRET")
+	if secret == "" {
+		return "", fmt.Errorf("JWT_SECRET environment variable not set")
+	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 
 	return token.SignedString([]byte(secret))
