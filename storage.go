@@ -1,15 +1,20 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
+	"time"
+
 	_ "github.com/lib/pq"
+	"github.com/sethvargo/go-retry"
 )
 
 type Storage interface {
 	CreateAccount(*Account) error
 	DeleteAccount(int) error
 	UpdateAccount(*Account) error
+	TransferMoney(*Account, *Account, uint64) error
 	GetAccountByNumber(int64) (*Account, error)
 	GetAccountById(int) (*Account, error)
 	GetAccounts() ([]*Account, error)
@@ -88,6 +93,59 @@ func (s *PostgressStore) DeleteAccount(id int) error {
 }
 
 func (s *PostgressStore) UpdateAccount(*Account) error {
+	return nil
+}
+
+func (s *PostgressStore) TransferMoney(fromAcc *Account, toAcc *Account, amount uint64) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	b := retry.NewFibonacci(10 * time.Millisecond)
+	b = retry.WithMaxDuration(5*time.Second, b)
+
+	err := retry.Do(ctx, retry.WithMaxRetries(3, b), func(ctx context.Context) error {
+		tx, err := s.db.BeginTx(ctx, nil)
+		if err != nil {
+			return fmt.Errorf("failed to begin transaction: %w", err)
+		}
+
+		// Attempt to execute operations within transaction
+		// Use defer with a function to handle rollback logic
+		committed := false
+		defer func() {
+			if !committed {
+				tx.Rollback()
+			}
+		}()
+
+		// Update first account
+		firstAccBalanceUpdate := fromAcc.Balance - amount
+		_, err = tx.ExecContext(ctx,
+			"UPDATE ACCOUNT SET balance = $1 WHERE number = $2",
+			firstAccBalanceUpdate, fromAcc.Number)
+		if err != nil {
+			return fmt.Errorf("failed to update source account: %w", err)
+		}
+
+		secondAccBalanceUpdate := toAcc.Balance + amount
+		_, err = tx.ExecContext(ctx,
+			"UPDATE ACCOUNT SET balance = $1 WHERE number = $2",
+			secondAccBalanceUpdate, toAcc.Number)
+		if err != nil {
+			return fmt.Errorf("failed to update destination account: %w", err)
+		}
+
+		// Commit transaction
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("failed to commit transaction: %w", err)
+		}
+
+		committed = true
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("transfer failed after retries: %w", err)
+	}
 	return nil
 }
 
