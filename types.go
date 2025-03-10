@@ -12,13 +12,13 @@ type HttpRequest interface {
 }
 
 type TransferRequest struct {
-	Number    int64  `json:"number"`
-	ToAccount int    `json:"id"`
-	Amount    uint64 `json:"amount"`
+	FromNumber int64  `json:"from_number"`
+	ToNumber   int64  `json:"to_number"`
+	Amount     uint64 `json:"amount"`
 }
 
 func (r *TransferRequest) GetAccountNumber() int64 {
-	return r.Number
+	return r.FromNumber
 }
 
 type GetAccountRequest struct {

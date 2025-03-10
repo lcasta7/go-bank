@@ -198,13 +198,39 @@ func (s *ApiServer) handleDeleteAccount(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *ApiServer) handleTransfer(w http.ResponseWriter, r *http.Request) error {
-	transferRequest := new(TransferRequest)
-	if err := json.NewDecoder(r.Body).Decode(transferRequest); err != nil {
-		return err
+	getTransferRequest, err := decodeAndValidateRequest[TransferRequest](r)
+	if err != nil {
+		fmt.Println("Error decoding into transfer request")
+		return WriteJson(w, http.StatusBadRequest, ApiError{Error: "could not complete request"})
 	}
-	defer r.Body.Close()
 
-	return WriteJson(w, http.StatusOK, transferRequest)
+	fromAccount, err := s.store.GetAccountByNumber(getTransferRequest.FromNumber)
+	if err != nil {
+		fmt.Println("Error retrieving source account")
+		return WriteJson(w, http.StatusInternalServerError, ApiError{Error: "could not complete request"})
+	}
+	if fromAccount.Balance < getTransferRequest.Amount {
+		fmt.Println("Insufficient funds in source account")
+		return WriteJson(w, http.StatusBadRequest, ApiError{Error: "could not complete request"})
+	}
+
+	toAccount, err := s.store.GetAccountByNumber(getTransferRequest.ToNumber)
+	if err != nil {
+		fmt.Println("Could not retrieve destination account")
+		return WriteJson(w, http.StatusInternalServerError, ApiError{Error: "could not complete request"})
+	}
+	if err := s.store.TransferMoney(fromAccount, toAccount, getTransferRequest.Amount); err != nil {
+		fmt.Println("Could complete the transfer")
+		return WriteJson(w, http.StatusInternalServerError, ApiError{Error: "could not complete request"})
+	}
+
+	fromAccountUpdated, err := s.store.GetAccountByNumber(getTransferRequest.FromNumber)
+	if err != nil {
+		fmt.Println("Could not retrieve updated from account")
+		return WriteJson(w, http.StatusInternalServerError, ApiError{Error: "Transfer successful, but could not retrieve updated account"})
+	}
+
+	return WriteJson(w, http.StatusOK, fromAccountUpdated)
 }
 
 // least important functions should go to the bottom
