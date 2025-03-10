@@ -7,6 +7,28 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
+type HttpRequest interface {
+	GetAccountNumber() int64
+}
+
+type TransferRequest struct {
+	Number    int64  `json:"number"`
+	ToAccount int    `json:"id"`
+	Amount    uint64 `json:"amount"`
+}
+
+func (r *TransferRequest) GetAccountNumber() int64 {
+	return r.Number
+}
+
+type GetAccountRequest struct {
+	Number int64 `json:"number"`
+}
+
+func (r *GetAccountRequest) GetAccountNumber() int64 {
+	return r.Number
+}
+
 type LoginRequest struct {
 	Number   int64  `json:"number"`
 	Password string `json:"password"`
@@ -29,11 +51,6 @@ type Account struct {
 
 func (a *Account) ValidatePassword(password string) error {
 	return bcrypt.CompareHashAndPassword([]byte(a.EncryptedPassword), []byte(password))
-}
-
-type TransferRequest struct {
-	ToAccount int    `json:"id"`
-	Amount    uint64 `json:"amount"`
 }
 
 type CreateAccountRequest struct {

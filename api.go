@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -8,9 +9,10 @@ import (
 	"os"
 	"strconv"
 
+	"time"
+
 	jwt "github.com/golang-jwt/jwt/v5"
 	"github.com/gorilla/mux"
-	"time"
 )
 
 type ApiServer struct {
@@ -29,14 +31,15 @@ func (s *ApiServer) Run() {
 	router := mux.NewRouter()
 
 	//this should be admin endpoint
-	router.HandleFunc("/account", makeHttpHandleFunc(s.handleGetAccounts)).Methods("GET")    //get all accounts
+	router.HandleFunc("/accounts", makeHttpHandleFunc(s.handleGetAccounts)).Methods("GET")   //get all accounts
 	router.HandleFunc("/account", makeHttpHandleFunc(s.handleCreateAccount)).Methods("POST") //create new account
 
 	//user api
 	router.HandleFunc("/login", makeHttpHandleFunc(s.handleLogin)).Methods("POST")
-	router.HandleFunc("/account/{id}", withJwtAuth(makeHttpHandleFunc(s.handleGetAccountById), s.store)).Methods("GET")
+	router.HandleFunc("/account", withJwtAuth(makeHttpHandleFunc(s.handleGetAccountByNumber))).Methods("GET")
+
+	router.HandleFunc("/transfer", withJwtAuth(makeHttpHandleFunc(s.handleTransfer))).Methods("POST")
 	router.HandleFunc("/account/{id}", makeHttpHandleFunc(s.handleDeleteAccount)).Methods("DELETE")
-	router.HandleFunc("/transfer", makeHttpHandleFunc(s.handleTransfer)).Methods("POST")
 
 	log.Println("Starting the server port: ", s.listenAddr)
 	http.ListenAndServe(s.listenAddr, router)
@@ -60,7 +63,6 @@ func (s *ApiServer) handleLogin(w http.ResponseWriter, r *http.Request) error {
 
 	//verify that the passwords match
 	if err := acc.ValidatePassword(req.Password); err != nil {
-		fmt.Println("Error validating password")
 		return fmt.Errorf("Not Authenticated")
 	}
 
@@ -87,6 +89,47 @@ func (s *ApiServer) handleGetAccounts(w http.ResponseWriter, r *http.Request) er
 	}
 
 	return WriteJson(w, http.StatusOK, accounts)
+}
+func decodeAndValidateRequest[T any](r *http.Request) (*T, error) {
+	// Create a new instance of the request type
+	req := new(T)
+	authorizedAccountNumber := r.Context().Value("authorizedAccountNumber").(int64)
+
+	// Decode the request body
+	if err := json.NewDecoder(r.Body).Decode(req); err != nil {
+		return nil, err
+	}
+	defer r.Body.Close()
+
+	// Validate the account number
+	reqWithAccount, ok := any(req).(HttpRequest)
+	if !ok {
+		return nil, fmt.Errorf("request type does not implement RequestWithAccount interface")
+	}
+
+	if reqWithAccount.GetAccountNumber() != authorizedAccountNumber {
+		return nil, fmt.Errorf("access denied: account numbers do not match")
+	}
+
+	return req, nil
+}
+
+func (s *ApiServer) handleGetAccountByNumber(w http.ResponseWriter, r *http.Request) error {
+
+	getAccountRequest, err := decodeAndValidateRequest[GetAccountRequest](r)
+
+	if err != nil {
+		fmt.Println("Error validating request")
+		return fmt.Errorf("Error processing request")
+	}
+
+	account, err := s.store.GetAccountByNumber(getAccountRequest.Number)
+	if err != nil {
+		fmt.Println("Error retrieving account from db")
+		return fmt.Errorf("Error processing request")
+	}
+
+	return WriteJson(w, http.StatusOK, account)
 }
 
 func (s *ApiServer) handleGetAccountById(w http.ResponseWriter, r *http.Request) error {
@@ -173,60 +216,41 @@ func WriteJson(w http.ResponseWriter, status int, v any) error {
 
 // interesting, notice the decoration of this.
 // now it can be modified before calling the actual function in the router
-func withJwtAuth(handlerFunc http.HandlerFunc, storage Storage) http.HandlerFunc {
+func withJwtAuth(handlerFunc http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		fmt.Println("Calling JWT auth middleware")
 
 		tokenString := r.Header.Get("x-jwt-token")
+		if tokenString == "" {
+			WriteJson(w, http.StatusUnauthorized, ApiError{Error: "authentication required"})
+			return
+		}
+
 		token, err := validateJwt(tokenString)
-		if err != nil {
+		if err != nil || !token.Valid {
 			fmt.Println("Unable to validate token")
 			WriteJson(w, http.StatusForbidden, ApiError{Error: "permission denied"})
 			return
 		}
 
-		if !token.Valid {
-			fmt.Println("Invalid Token")
-			WriteJson(w, http.StatusForbidden, ApiError{Error: "permission denied"})
+		//check the claims
+		claims, ok := token.Claims.(jwt.MapClaims)
+		if !ok {
+			fmt.Println("Invalid claims format")
+			WriteJson(w, http.StatusUnauthorized, ApiError{Error: "permission denied"})
 			return
 		}
 
-		paramId, err := getParameter(r, "id")
-		if err != nil {
-			fmt.Println("No parameter Id")
-			WriteJson(w, http.StatusForbidden, ApiError{Error: "permission denied"})
-			return
-		}
-		accountId, err := strconv.Atoi(paramId)
-		if err != nil {
-			fmt.Println("Invalid Id")
-			WriteJson(w, http.StatusForbidden, ApiError{Error: "permission denied"})
-			return
-		}
-
-		account, err := storage.GetAccountById(accountId)
-		if err != nil {
-			fmt.Println("Could not retrieve for id")
-			WriteJson(w, http.StatusForbidden, ApiError{Error: "permission denied"})
-			return
-		}
-
-		//get user claims
-		claims := token.Claims.(jwt.MapClaims)
 		claimAccountNumber, ok := claims["accountNumber"].(float64)
 		if !ok {
 			fmt.Println("Invalid claim type for accountNumber")
-			WriteJson(w, http.StatusForbidden, ApiError{Error: "invalid token"})
-			return
-		}
-
-		if account.Number != int64(claimAccountNumber) {
-			fmt.Println("Insufficient Permissions")
 			WriteJson(w, http.StatusForbidden, ApiError{Error: "permission denied"})
 			return
 		}
 
-		handlerFunc(w, r)
+		ctx := context.WithValue(r.Context(), "authorizedAccountNumber", int64(claimAccountNumber))
+
+		handlerFunc(w, r.WithContext(ctx))
 	}
 }
 
