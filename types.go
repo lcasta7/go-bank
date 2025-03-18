@@ -21,6 +21,14 @@ func (r *TransferRequest) GetAccountNumber() int64 {
 	return r.FromNumber
 }
 
+type DeleteAccountRequest struct {
+	AdminAccount int64 `json:"admin_account"`
+}
+
+func (r *DeleteAccountRequest) GetAccountNumber() int64 {
+	return r.AdminAccount
+}
+
 type GetAccountRequest struct {
 	Number int64 `json:"number"`
 }
@@ -46,6 +54,7 @@ type Account struct {
 	Number            int64     `json:"number"`
 	EncryptedPassword string    `json:"-"`
 	Balance           uint64    `json:"balance"`
+	Role              string    `json:"role"`
 	CreatedAt         time.Time `json:"createdAt"`
 }
 
@@ -54,13 +63,19 @@ func (a *Account) ValidatePassword(password string) error {
 }
 
 type CreateAccountRequest struct {
-	FirstName string `json:"firstName"`
-	LastName  string `json:"lastName"`
-	Password  string `json:"password"`
-	Balance   uint64 `json:"balance"`
+	FirstName    string `json:"firstName"`
+	LastName     string `json:"lastName"`
+	Password     string `json:"password"`
+	Role         string `json:"role"`
+	Balance      uint64 `json:"balance"`
+	AdminAccount int64  `json:"admin_account"`
 }
 
-func NewAccount(firstName string, lastName string, password string, balance uint64) (*Account, error) {
+func (r *CreateAccountRequest) GetAccountNumber() int64 {
+	return r.AdminAccount
+}
+
+func NewAccount(firstName string, lastName string, password string, role string, balance uint64) (*Account, error) {
 	encpw, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
 		return nil, err
@@ -72,6 +87,7 @@ func NewAccount(firstName string, lastName string, password string, balance uint
 		Number:            int64(rand.Intn(10000)),
 		EncryptedPassword: string(encpw),
 		Balance:           balance,
+		Role:              role,
 		CreatedAt:         time.Now().UTC(),
 	}, nil
 }
