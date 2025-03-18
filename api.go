@@ -30,17 +30,22 @@ func NewApiServer(listenAddr string, store Storage) *ApiServer {
 func (s *ApiServer) Run() {
 	router := mux.NewRouter()
 
-	//this should be admin endpoint
-	router.HandleFunc("/accounts", makeHttpHandleFunc(s.handleGetAccounts)).Methods("GET")   //get all accounts
-	router.HandleFunc("/account", makeHttpHandleFunc(s.handleCreateAccount)).Methods("POST") //create new account
+	//admin endpoints
+	router.HandleFunc("/accounts",
+		jwtAuthMiddleware(makeHttpHandleFunc(s.handleGetAccounts))).Methods("GET")
+	router.HandleFunc("/account",
+		jwtAuthMiddleware(makeHttpHandleFunc(s.handleCreateAccount))).Methods("POST")
+	router.HandleFunc("/account/{id}",
+		jwtAuthMiddleware(makeHttpHandleFunc(s.handleDeleteAccount))).Methods("DELETE")
 
-	//user api
+	//user endpoints
 	router.HandleFunc("/login", makeHttpHandleFunc(s.handleLogin)).Methods("POST")
-	router.HandleFunc("/account", withJwtAuth(makeHttpHandleFunc(s.handleGetAccountByNumber))).Methods("GET")
+	router.HandleFunc("/account",
+		jwtAuthMiddleware(makeHttpHandleFunc(s.handleGetAccountByNumber))).Methods("GET")
+	router.HandleFunc("/transfer",
+		jwtAuthMiddleware(makeHttpHandleFunc(s.handleTransfer))).Methods("POST")
 
-	router.HandleFunc("/transfer", withJwtAuth(makeHttpHandleFunc(s.handleTransfer))).Methods("POST")
-	router.HandleFunc("/account/{id}", makeHttpHandleFunc(s.handleDeleteAccount)).Methods("DELETE")
-
+	//start server
 	log.Println("Starting the server port: ", s.listenAddr)
 	http.ListenAndServe(s.listenAddr, router)
 }
@@ -81,8 +86,15 @@ func (s *ApiServer) handleLogin(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (s *ApiServer) handleGetAccounts(w http.ResponseWriter, r *http.Request) error {
-	accounts, err := s.store.GetAccounts()
 
+	_, err := decodeAndValidateRequest[GetAccountRequest](r, "admin")
+
+	if err != nil {
+		fmt.Println("Error validating request")
+		return fmt.Errorf("Error processing request")
+	}
+
+	accounts, err := s.store.GetAccounts()
 	if err != nil {
 		fmt.Println("Error retrieving accounts")
 		return err
@@ -90,10 +102,19 @@ func (s *ApiServer) handleGetAccounts(w http.ResponseWriter, r *http.Request) er
 
 	return WriteJson(w, http.StatusOK, accounts)
 }
-func decodeAndValidateRequest[T any](r *http.Request) (*T, error) {
+
+func decodeAndValidateRequest[T any](r *http.Request, requestType string) (*T, error) {
 	// Create a new instance of the request type
 	req := new(T)
 	authorizedAccountNumber := r.Context().Value("authorizedAccountNumber").(int64)
+	role, ok := r.Context().Value("role").(string)
+
+	// handle admin request
+	if requestType == "admin" {
+		if !ok || role != "admin" {
+			return nil, fmt.Errorf("Insufficient permissions: admin role required")
+		}
+	}
 
 	// Decode the request body
 	if err := json.NewDecoder(r.Body).Decode(req); err != nil {
@@ -116,7 +137,7 @@ func decodeAndValidateRequest[T any](r *http.Request) (*T, error) {
 
 func (s *ApiServer) handleGetAccountByNumber(w http.ResponseWriter, r *http.Request) error {
 
-	getAccountRequest, err := decodeAndValidateRequest[GetAccountRequest](r)
+	getAccountRequest, err := decodeAndValidateRequest[GetAccountRequest](r, "user")
 
 	if err != nil {
 		fmt.Println("Error validating request")
@@ -155,13 +176,18 @@ func (s *ApiServer) handleGetAccountById(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *ApiServer) handleCreateAccount(w http.ResponseWriter, r *http.Request) error {
-	accRequest := new(CreateAccountRequest)
-	if err := json.NewDecoder(r.Body).Decode(accRequest); err != nil {
+	//todo check that it's admin
+	accRequest, err := decodeAndValidateRequest[CreateAccountRequest](r, "admin")
+	if err != nil {
 		return err
 	}
-	defer r.Body.Close()
 
-	account, err := NewAccount(accRequest.FirstName, accRequest.LastName, accRequest.Password, accRequest.Balance)
+	//default the role to user
+	if accRequest.Role == "" {
+		accRequest.Role = "user"
+	}
+
+	account, err := NewAccount(accRequest.FirstName, accRequest.LastName, accRequest.Password, accRequest.Role, accRequest.Balance)
 	if err != nil {
 		return err
 	}
@@ -178,27 +204,36 @@ func (s *ApiServer) handleCreateAccount(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *ApiServer) handleDeleteAccount(w http.ResponseWriter, r *http.Request) error {
+	_, err := decodeAndValidateRequest[DeleteAccountRequest](r, "admin")
+
+	if err != nil {
+		fmt.Println("Error decoding delete request")
+		return WriteJson(w, http.StatusBadRequest, fmt.Errorf("Unable to delete account"))
+	}
+
 	parameter, err := getParameter(r, "id")
 	if err != nil {
 		fmt.Println("Error retrieving parameter")
-		return err
+		return WriteJson(w, http.StatusBadRequest, fmt.Errorf("Unable to delete account"))
 	}
 
 	id, err := strconv.Atoi(parameter)
 	if err != nil {
 		fmt.Printf("Unable to convert parameter %s", parameter)
-		return err
+		return WriteJson(w, http.StatusBadRequest, fmt.Errorf("Unable to delete account"))
 	}
 
 	if err := s.store.DeleteAccount(id); err != nil {
-		return fmt.Errorf("Could not delete account with id=%d", id)
+		return WriteJson(w, http.StatusBadRequest, fmt.Errorf("Unable to delete account"))
 	}
 
 	return WriteJson(w, http.StatusOK, map[string]int{"deleted": id})
 }
 
 func (s *ApiServer) handleTransfer(w http.ResponseWriter, r *http.Request) error {
-	getTransferRequest, err := decodeAndValidateRequest[TransferRequest](r)
+
+	getTransferRequest, err := decodeAndValidateRequest[TransferRequest](r, "user")
+
 	if err != nil {
 		fmt.Println("Error decoding into transfer request")
 		return WriteJson(w, http.StatusBadRequest, ApiError{Error: "could not complete request"})
@@ -240,31 +275,45 @@ func WriteJson(w http.ResponseWriter, status int, v any) error {
 	return json.NewEncoder(w).Encode(v)
 }
 
-// interesting, notice the decoration of this.
-// now it can be modified before calling the actual function in the router
-func withJwtAuth(handlerFunc http.HandlerFunc) http.HandlerFunc {
+func getClaimsMap(w http.ResponseWriter, r *http.Request) (jwt.MapClaims, error) {
+	fmt.Println("Calling JWT auth middleware")
+
+	tokenString := r.Header.Get("x-jwt-token")
+	if tokenString == "" {
+		WriteJson(w, http.StatusUnauthorized, ApiError{Error: "authentication required"})
+		return nil, fmt.Errorf("Not logged in.")
+	}
+
+	token, err := validateJwt(tokenString)
+	if err != nil || !token.Valid {
+		WriteJson(w, http.StatusForbidden, ApiError{Error: "permission denied"})
+		return nil, fmt.Errorf("Can't validate token.")
+	}
+
+	//check the claims
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok {
+		WriteJson(w, http.StatusUnauthorized, ApiError{Error: "permission denied"})
+		return nil, fmt.Errorf("Invalid claims format")
+	}
+
+	return claims, nil
+}
+
+// this will only check for user claims
+func jwtAuthMiddleware(handlerFunc http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		fmt.Println("Calling JWT auth middleware")
-
-		tokenString := r.Header.Get("x-jwt-token")
-		if tokenString == "" {
-			WriteJson(w, http.StatusUnauthorized, ApiError{Error: "authentication required"})
-			return
-		}
-
-		token, err := validateJwt(tokenString)
-		if err != nil || !token.Valid {
-			fmt.Println("Unable to validate token")
-			WriteJson(w, http.StatusForbidden, ApiError{Error: "permission denied"})
-			return
-		}
-
-		//check the claims
-		claims, ok := token.Claims.(jwt.MapClaims)
-		if !ok {
+		claims, err := getClaimsMap(w, r)
+		if err != nil {
 			fmt.Println("Invalid claims format")
 			WriteJson(w, http.StatusUnauthorized, ApiError{Error: "permission denied"})
 			return
+		}
+
+		role, ok := claims["role"].(string)
+		if !ok {
+			fmt.Println("Role not specified, defaulting to user")
+			role = "user"
 		}
 
 		claimAccountNumber, ok := claims["accountNumber"].(float64)
@@ -274,7 +323,8 @@ func withJwtAuth(handlerFunc http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
-		ctx := context.WithValue(r.Context(), "authorizedAccountNumber", int64(claimAccountNumber))
+		ctx := context.WithValue(r.Context(), "role", string(role))
+		ctx = context.WithValue(ctx, "authorizedAccountNumber", int64(claimAccountNumber))
 
 		handlerFunc(w, r.WithContext(ctx))
 	}
@@ -294,6 +344,7 @@ func validateJwt(tokenString string) (*jwt.Token, error) {
 func createJwt(account *Account) (string, error) {
 	// Create the Claims
 	claims := &jwt.MapClaims{
+		"role":          account.Role,
 		"expiresAt":     jwt.NewNumericDate(time.Now().Add(24 * time.Hour)),
 		"accountNumber": account.Number,
 	}

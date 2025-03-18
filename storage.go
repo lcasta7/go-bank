@@ -54,22 +54,25 @@ func (s *PostgressStore) createAccountTable() error {
                   number BIGINT,
                   encrypted_password VARCHAR(100),
                   balance BIGINT,
+                  role VARCHAR(100),
                   created_at timestamp DEFAULT NOW()
            )`
 	_, err := s.db.Exec(query)
 	return err
 }
 
+//ALTER TABLE accounts ADD COLUMN role VARCHAR(50) DEFAULT 'user';
+
 func (s *PostgressStore) CreateAccount(acc *Account) error {
 	query := `INSERT INTO account
-(first_name, last_name, number, encrypted_password, balance, created_at)
-VALUES
-($1, $2, $3, $4, $5, $6)
-RETURNING ID`
+                   (first_name, last_name, number, encrypted_password, balance, role, created_at)
+                   VALUES
+                   ($1, $2, $3, $4, $5, $6, $7)
+                   RETURNING ID`
 
 	err := s.db.QueryRow(query, acc.FirstName,
 		acc.LastName, acc.Number, acc.EncryptedPassword,
-		acc.Balance, acc.CreatedAt).Scan(&acc.Id)
+		acc.Balance, acc.Role, acc.CreatedAt).Scan(&acc.Id)
 
 	return err
 }
@@ -206,6 +209,7 @@ func scanIntoAccount(rows *sql.Rows) (*Account, error) {
 		&account.Number,
 		&account.EncryptedPassword,
 		&account.Balance,
+		&account.Role,
 		&account.CreatedAt)
 
 	return account, err

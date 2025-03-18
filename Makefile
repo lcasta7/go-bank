@@ -7,5 +7,8 @@ run: build
 seed: build
 	@./bin/gobank  --seed
 
+createAdmin: build
+	@./bin/gobank --create-admin --password="gobank" --first_name="chuck" --last_name="norris"
+
 test:
 	@go test -v ./...
