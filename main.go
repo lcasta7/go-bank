@@ -41,7 +41,7 @@ func main() {
 	password := flag.String("password", "", "password for admin account")
 	flag.Parse()
 
-	store, err := NewProstgressStore()
+	store, err := NewPostgressStore()
 
 	if err != nil {
 		log.Fatal("Error initializing the db")
