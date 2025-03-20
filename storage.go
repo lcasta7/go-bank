@@ -13,10 +13,8 @@ import (
 type Storage interface {
 	CreateAccount(*Account) error
 	DeleteAccount(int) error
-	UpdateAccount(*Account) error
 	TransferMoney(*Account, *Account, uint64) error
 	GetAccountByNumber(int64) (*Account, error)
-	GetAccountById(int) (*Account, error)
 	GetAccounts() ([]*Account, error)
 }
 
@@ -25,7 +23,7 @@ type PostgressStore struct {
 	db *sql.DB
 }
 
-func NewProstgressStore() (*PostgressStore, error) {
+func NewPostgressStore() (*PostgressStore, error) {
 	connStr := "user=postgres dbname=postgres password=gobank sslmode=disable"
 	db, err := sql.Open("postgres", connStr)
 
@@ -61,8 +59,6 @@ func (s *PostgressStore) createAccountTable() error {
 	return err
 }
 
-//ALTER TABLE accounts ADD COLUMN role VARCHAR(50) DEFAULT 'user';
-
 func (s *PostgressStore) CreateAccount(acc *Account) error {
 	query := `INSERT INTO account
                    (first_name, last_name, number, encrypted_password, balance, role, created_at)
@@ -93,10 +89,6 @@ func (s *PostgressStore) DeleteAccount(id int) error {
 	}
 
 	return err
-}
-
-func (s *PostgressStore) UpdateAccount(*Account) error {
-	return nil
 }
 
 func (s *PostgressStore) TransferMoney(fromAcc *Account, toAcc *Account, amount uint64) error {
@@ -163,20 +155,6 @@ func (s *PostgressStore) GetAccountByNumber(number int64) (*Account, error) {
 	}
 
 	return nil, fmt.Errorf("account number not found for number %d", number)
-}
-
-func (s *PostgressStore) GetAccountById(id int) (*Account, error) {
-	rows, err := s.db.Query("SELECT * FROM ACCOUNT WHERE ID = $1", id)
-
-	if err != nil {
-		return nil, err
-	}
-
-	for rows.Next() {
-		return scanIntoAccount(rows)
-	}
-
-	return nil, fmt.Errorf("account with id %d not found", id)
 }
 
 func (s *PostgressStore) GetAccounts() ([]*Account, error) {

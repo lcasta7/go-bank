@@ -86,7 +86,6 @@ func (s *ApiServer) handleLogin(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (s *ApiServer) handleGetAccounts(w http.ResponseWriter, r *http.Request) error {
-
 	_, err := decodeAndValidateRequest[GetAccountRequest](r, "admin")
 
 	if err != nil {
@@ -136,7 +135,6 @@ func decodeAndValidateRequest[T any](r *http.Request, requestType string) (*T, e
 }
 
 func (s *ApiServer) handleGetAccountByNumber(w http.ResponseWriter, r *http.Request) error {
-
 	getAccountRequest, err := decodeAndValidateRequest[GetAccountRequest](r, "user")
 
 	if err != nil {
@@ -148,28 +146,6 @@ func (s *ApiServer) handleGetAccountByNumber(w http.ResponseWriter, r *http.Requ
 	if err != nil {
 		fmt.Println("Error retrieving account from db")
 		return fmt.Errorf("Error processing request")
-	}
-
-	return WriteJson(w, http.StatusOK, account)
-}
-
-func (s *ApiServer) handleGetAccountById(w http.ResponseWriter, r *http.Request) error {
-	parameter, err := getParameter(r, "id")
-	if err != nil {
-		fmt.Println("Error retrieving parameter")
-		return err
-	}
-
-	id, err := strconv.Atoi(parameter)
-	if err != nil {
-		fmt.Printf("Unable to convert parameter %s", parameter)
-		return err
-	}
-
-	account, err := s.store.GetAccountById(id)
-	if err != nil {
-		fmt.Printf("Error retrieving account for %d", id)
-		return err
 	}
 
 	return WriteJson(w, http.StatusOK, account)
@@ -197,10 +173,7 @@ func (s *ApiServer) handleCreateAccount(w http.ResponseWriter, r *http.Request) 
 		return err
 	}
 
-	fmt.Printf("Welcome %s, with balance=%d", accRequest.FirstName, accRequest.Balance)
-
 	return WriteJson(w, http.StatusOK, account)
-
 }
 
 func (s *ApiServer) handleDeleteAccount(w http.ResponseWriter, r *http.Request) error {
@@ -231,7 +204,6 @@ func (s *ApiServer) handleDeleteAccount(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *ApiServer) handleTransfer(w http.ResponseWriter, r *http.Request) error {
-
 	getTransferRequest, err := decodeAndValidateRequest[TransferRequest](r, "user")
 
 	if err != nil {
@@ -276,8 +248,6 @@ func WriteJson(w http.ResponseWriter, status int, v any) error {
 }
 
 func getClaimsMap(w http.ResponseWriter, r *http.Request) (jwt.MapClaims, error) {
-	fmt.Println("Calling JWT auth middleware")
-
 	tokenString := r.Header.Get("x-jwt-token")
 	if tokenString == "" {
 		WriteJson(w, http.StatusUnauthorized, ApiError{Error: "authentication required"})
