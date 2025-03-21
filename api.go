@@ -32,7 +32,7 @@ func (s *ApiServer) Run() {
 
 	//admin endpoints
 	router.HandleFunc("/accounts",
-		jwtAuthMiddleware(makeHttpHandleFunc(s.handleGetAccounts))).Methods("GET")
+		jwtAuthMiddleware(makeHttpHandleFunc(s.handleGetAccounts))).Methods("POST")
 	router.HandleFunc("/account",
 		jwtAuthMiddleware(makeHttpHandleFunc(s.handleCreateAccount))).Methods("POST")
 	router.HandleFunc("/account/{id}",
@@ -40,8 +40,8 @@ func (s *ApiServer) Run() {
 
 	//user endpoints
 	router.HandleFunc("/login", makeHttpHandleFunc(s.handleLogin)).Methods("POST")
-	router.HandleFunc("/account",
-		jwtAuthMiddleware(makeHttpHandleFunc(s.handleGetAccountByNumber))).Methods("GET")
+	router.HandleFunc("/account/get",
+		jwtAuthMiddleware(makeHttpHandleFunc(s.handleGetAccountByNumber))).Methods("POST")
 	router.HandleFunc("/transfer",
 		jwtAuthMiddleware(makeHttpHandleFunc(s.handleTransfer))).Methods("POST")
 
@@ -64,6 +64,7 @@ func (s *ApiServer) handleLogin(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		fmt.Println("Error retrieving account")
 		return fmt.Errorf("Not Authenticated")
+
 	}
 
 	//verify that the passwords match
@@ -90,7 +91,7 @@ func (s *ApiServer) handleGetAccounts(w http.ResponseWriter, r *http.Request) er
 
 	if err != nil {
 		fmt.Println("Error validating request")
-		return fmt.Errorf("Error processing request")
+		return WriteJson(w, http.StatusBadRequest, err)
 	}
 
 	accounts, err := s.store.GetAccounts()
@@ -205,10 +206,14 @@ func (s *ApiServer) handleDeleteAccount(w http.ResponseWriter, r *http.Request) 
 
 func (s *ApiServer) handleTransfer(w http.ResponseWriter, r *http.Request) error {
 	getTransferRequest, err := decodeAndValidateRequest[TransferRequest](r, "user")
-
 	if err != nil {
 		fmt.Println("Error decoding into transfer request")
 		return WriteJson(w, http.StatusBadRequest, ApiError{Error: "could not complete request"})
+	}
+
+	if getTransferRequest.FromNumber == getTransferRequest.ToNumber {
+		return WriteJson(w, http.StatusBadRequest, ApiError{Error: "could not complete request"})
+
 	}
 
 	fromAccount, err := s.store.GetAccountByNumber(getTransferRequest.FromNumber)
@@ -242,11 +247,12 @@ func (s *ApiServer) handleTransfer(w http.ResponseWriter, r *http.Request) error
 
 // least important functions should go to the bottom
 func WriteJson(w http.ResponseWriter, status int, v any) error {
-	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
+	w.Header().Set("Content-Type", "application/json")
 	return json.NewEncoder(w).Encode(v)
 }
 
+// todo - needs to be corrected, redundant to call WriteJson
 func getClaimsMap(w http.ResponseWriter, r *http.Request) (jwt.MapClaims, error) {
 	tokenString := r.Header.Get("x-jwt-token")
 	if tokenString == "" {
@@ -263,8 +269,9 @@ func getClaimsMap(w http.ResponseWriter, r *http.Request) (jwt.MapClaims, error)
 	//check the claims
 	claims, ok := token.Claims.(jwt.MapClaims)
 	if !ok {
-		WriteJson(w, http.StatusUnauthorized, ApiError{Error: "permission denied"})
-		return nil, fmt.Errorf("Invalid claims format")
+		fmt.Println("Invalid claims")
+
+		return nil, WriteJson(w, http.StatusUnauthorized, ApiError{Error: "permission denied"})
 	}
 
 	return claims, nil
@@ -276,7 +283,6 @@ func jwtAuthMiddleware(handlerFunc http.HandlerFunc) http.HandlerFunc {
 		claims, err := getClaimsMap(w, r)
 		if err != nil {
 			fmt.Println("Invalid claims format")
-			WriteJson(w, http.StatusUnauthorized, ApiError{Error: "permission denied"})
 			return
 		}
 

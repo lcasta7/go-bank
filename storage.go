@@ -149,6 +149,7 @@ func (s *PostgressStore) GetAccountByNumber(number int64) (*Account, error) {
 	if err != nil {
 		return nil, err
 	}
+	defer rows.Close()
 
 	for rows.Next() {
 		return scanIntoAccount(rows)
@@ -159,10 +160,10 @@ func (s *PostgressStore) GetAccountByNumber(number int64) (*Account, error) {
 
 func (s *PostgressStore) GetAccounts() ([]*Account, error) {
 	rows, err := s.db.Query("SELECT * FROM ACCOUNT")
-
 	if err != nil {
 		return nil, err
 	}
+	defer rows.Close()
 
 	accounts := []*Account{}
 	for rows.Next() {
